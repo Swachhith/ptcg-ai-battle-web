@@ -1,0 +1,38 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+.cache/
+
+# competition data: not redistributable, fetch with setup/fetch_kaggle_data.py
+data/cg/
+data/EN_Card_Data.csv
+data/carddb.json
+data/embed_texts.json
+data/embed_vectors_te3l.npz
+data/pool_names.txt
+data/deck_implied.csv
+submission/cg/
+submission/EN_Card_Data.csv
+submission/data/EN_Card_Data.csv
+submission/submission.tar.gz
+*.tar.gz
+
+# official card images: copyrighted, fetch with webapp/tools/fetch_card_images.py
+webapp/server/card_images/
+
+# frontend build
+webapp/web/node_modules/
+webapp/web/dist/
+
+# training artifacts
+native/build/
+native/puffer_ptcg/_C*.so
+native/*.bin
+native/parity_stream*.jsonl
+native/parity_rows.bin
+experiments/
+runs/
+wandb/
+opponents/*/
+!opponents/README.md
