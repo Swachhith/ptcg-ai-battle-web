@@ -1,0 +1,8 @@
+# web app runtime (the agent itself needs torch + numpy)
+torch
+numpy
+fastapi
+uvicorn[standard]
+pydantic
+kaggle        # setup/fetch_kaggle_data.py and webapp/tools/fetch_card_images.py
+pillow        # webapp/tools/fetch_card_images.py
