@@ -36,3 +36,4 @@ runs/
 wandb/
 opponents/*/
 !opponents/README.md
+webapp/web/*.tsbuildinfo
