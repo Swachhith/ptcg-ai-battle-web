@@ -49,6 +49,7 @@ def main():
         sheet = z.read(SHEET)
         for dst in ("data/EN_Card_Data.csv", "submission/EN_Card_Data.csv",
                     "submission/data/EN_Card_Data.csv"):
+            os.makedirs(os.path.dirname(os.path.join(ROOT, dst)), exist_ok=True)
             with open(os.path.join(ROOT, dst), "wb") as f:
                 f.write(sheet)
     print("installed the SDK into data/cg and submission/cg, and the card sheet into data/ and submission/")
