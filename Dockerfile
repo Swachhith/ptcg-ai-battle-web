@@ -12,7 +12,7 @@
 # ---- stage 1: fetch the SDK and card sheet (the 300 MB archive stays in this stage)
 FROM python:3.12-slim AS sdk
 WORKDIR /repo
-RUN pip install --no-cache-dir kaggle
+RUN pip install --no-cache-dir kaggle six
 COPY setup/fetch_kaggle_data.py setup/fetch_kaggle_data.py
 RUN --mount=type=secret,id=kaggle_json,target=/root/.kaggle/kaggle.json,required=true \
     python setup/fetch_kaggle_data.py
