@@ -1,0 +1,22 @@
+# Render Blueprint for the game server (free web service, built from the Dockerfile).
+#
+# Before the first deploy, in the service's Environment page:
+#   1. add a Secret File named  kaggle.json  with your Kaggle API token (the build uses it
+#      to download the competition SDK, which is not in this repository);
+#   2. set PTCG_ALLOWED_ORIGINS to the address of the site that hosts the game page,
+#      for example https://your-portfolio.example (comma-separate several).
+services:
+  - type: web
+    name: ptcg-agent-server
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PTCG_INFERENCE
+        value: browser
+      - key: PTCG_MAX_GAMES
+        value: "3"
+      - key: PTCG_ALLOWED_ORIGINS
+        sync: false

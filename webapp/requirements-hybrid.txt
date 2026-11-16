@@ -1,0 +1,6 @@
+# Game server with the agent's network running in the player's browser (PTCG_INFERENCE=browser).
+# No PyTorch needed. For the server-side mode use requirements.txt instead.
+numpy
+fastapi
+uvicorn[standard]
+pydantic

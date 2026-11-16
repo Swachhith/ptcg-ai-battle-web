@@ -29,18 +29,46 @@ from paths import CARD_IMAGES, DIST, SUBMISSION  # noqa: E402
 from worker import worker_main  # noqa: E402
 
 MAX_GAMES = int(os.environ.get("PTCG_MAX_GAMES", "8"))
+# Where the agent's network runs when a client does not say: "server" (PyTorch
+# here, as before) or "browser" (the player's browser; no PyTorch needed here).
+# A client can ask for either in its first message.
+INFERENCE = os.environ.get("PTCG_INFERENCE", "server")
+if INFERENCE not in ("server", "browser"):
+    INFERENCE = "server"
+# A deployment without PyTorch (the Docker image) can only do browser inference.
+import importlib.util  # noqa: E402
+
+HAS_TORCH = importlib.util.find_spec("torch") is not None
+if not HAS_TORCH:
+    INFERENCE = "browser"
 CTX = mp.get_context("spawn")
 
 app = FastAPI(title="PTCG AI Battle")
+
+# The portfolio site serves the game UI from another origin and calls this API
+# from the browser. PTCG_ALLOWED_ORIGINS is a comma-separated list of the
+# origins allowed to do that.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.environ.get(
+    "PTCG_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 CARDS = carddb.build_cards()
 PRESETS = carddb.build_presets(CARDS)
 ENGINE_LOCK = threading.Lock()
 
 
 class Worker:
-    def __init__(self):
+    def __init__(self, inference=INFERENCE):
+        self.inference = inference
         self.conn, child = CTX.Pipe()
-        self.proc = CTX.Process(target=worker_main, args=(child, SUBMISSION),
+        self.proc = CTX.Process(target=worker_main, args=(child, SUBMISSION, inference),
                                 daemon=True)
         self.proc.start()
         child.close()
@@ -66,11 +94,14 @@ class Pool:
         self.active = 0
         self.lock = threading.Lock()
 
-    def take(self):
+    def take(self, inference=INFERENCE):
+        w = None
         with self.lock:
-            w, self.spare = self.spare, None
+            # the idle process is loaded for the default mode
+            if self.spare is not None and self.spare.inference == inference:
+                w, self.spare = self.spare, None
         if w is None or not w.proc.is_alive():
-            w = Worker()
+            w = Worker(inference)
         self.refill()
         return w
 
@@ -86,6 +117,12 @@ POOL = Pool()
 @app.on_event("startup")
 async def _warm():
     POOL.refill()
+
+
+@app.get("/api/health")
+def api_health():
+    """For the host's health check, and to wake a sleeping instance."""
+    return {"ok": True, "inference": INFERENCE, "games": POOL.active}
 
 
 @app.get("/api/cards")
@@ -118,6 +155,15 @@ def api_validate(d: DeckIn):
 
 @app.websocket("/ws/game")
 async def ws_game(ws: WebSocket):
+    # Browsers always send Origin on a WebSocket; CORS does not cover sockets, so check it
+    # here. Pages on other sites cannot use this server. (The stand-alone app is served
+    # from this server itself, which is always allowed.)
+    origin = (ws.headers.get("origin") or "").rstrip("/")
+    host = ws.headers.get("host") or ""
+    same = origin.split("://", 1)[-1] == host
+    if origin and not same and "*" not in ALLOWED_ORIGINS and origin not in ALLOWED_ORIGINS:
+        await ws.close(code=1008)
+        return
     await ws.accept()
     if POOL.active >= MAX_GAMES:
         await ws.send_json({"type": "error", "message": "The server is full, try again shortly."})
@@ -141,8 +187,11 @@ async def ws_game(ws: WebSocket):
             return
         seat = start.get("seat")
         seat = random.randint(0, 1) if seat not in (0, 1) else int(seat)
-        await ws.send_json({"type": "loading"})
-        worker = await asyncio.to_thread(POOL.take)
+        inference = start.get("inference")
+        if inference not in ("server", "browser") or not HAS_TORCH:
+            inference = INFERENCE
+        await ws.send_json({"type": "loading", "inference": inference})
+        worker = await asyncio.to_thread(POOL.take, inference)
         conn = worker.conn
 
         def recv():
@@ -170,6 +219,9 @@ async def ws_game(ws: WebSocket):
                 msg = await ws.receive_json()
                 if msg.get("type") == "answer":
                     conn.send({"cmd": "answer", "indices": msg.get("indices", [])})
+                elif msg.get("type") == "logits":
+                    conn.send({"cmd": "logits", "id": msg.get("id"),
+                               "logits": msg.get("logits")})
                 elif msg.get("type") == "quit":
                     return
 

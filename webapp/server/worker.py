@@ -13,7 +13,17 @@ Messages to the parent (dicts over a multiprocessing Pipe):
   invalid   {message}        the human's answer was rejected; prompt follows
   game_over {result, reason, state, aiDeck}
   error     {message}
+  infer     {id, obs}        browser inference only: an encoded observation
+                             (base64 float32) for the player's browser to
+                             score; the parent answers with cmd "logits"
+
+Two ways to run the agent's network (the `inference` argument):
+  "server"   the Kaggle bundle as submitted, PyTorch in this process
+  "browser"  the network runs in the player's browser (ONNX); this process
+             keeps the engine and the NumPy side of the agent and never
+             imports PyTorch (see remote_agent.py)
 """
+import base64
 import copy
 import os
 import sys
@@ -173,14 +183,52 @@ class View:
         return cur
 
 
-def run(conn, submission_dir):
+INFER_TIMEOUT = float(os.environ.get("PTCG_INFER_TIMEOUT", "30"))
+
+
+def remote_agent(conn, submission_dir, ai_deck):
+    """The agent with its forward pass done in the player's browser."""
+    import numpy as np
+    from remote_agent import Disconnected, RemoteAgent
+    deck = ai_deck or [int(l) for l in open(os.path.join(submission_dir, "deck.csv")) if l.strip()]
+    seq = [0]
+
+    def infer(row):
+        seq[0] += 1
+        conn.send({"type": "infer", "id": seq[0],
+                   "obs": base64.b64encode(row.tobytes()).decode("ascii")})
+        deadline = time.time() + INFER_TIMEOUT
+        while True:
+            left = deadline - time.time()
+            if left <= 0 or not conn.poll(left):
+                raise TimeoutError("no scores from the browser")
+            msg = conn.recv()
+            if msg.get("cmd") == "quit":
+                raise Disconnected()
+            if msg.get("cmd") == "logits" and msg.get("id") == seq[0]:
+                return np.asarray(msg.get("logits") or [], dtype=np.float32)
+
+    return RemoteAgent(submission_dir, deck, infer).agent
+
+
+def run(conn, submission_dir, inference="server"):
     try:
-        env = load_agent(submission_dir)
+        submission_dir = os.path.abspath(submission_dir)
+        browser = inference == "browser"
+        if browser:
+            sys.path.insert(0, submission_dir)
+            os.chdir(submission_dir)
+            import ptcg.rl  # noqa: F401  (puts the competition SDK on the path)
+        else:
+            env = load_agent(submission_dir)
         conn.send({"type": "ready"})
         cmd = conn.recv()
         if cmd.get("cmd") != "start":
             return
-        agent = set_ai_deck(env, submission_dir, cmd.get("aiDeck"))
+        if browser:
+            agent = remote_agent(conn, submission_dir, cmd.get("aiDeck"))
+        else:
+            agent = set_ai_deck(env, submission_dir, cmd.get("aiDeck"))
         from cg import game
         human = int(cmd["humanSeat"])
         ai = 1 - human
@@ -255,6 +303,8 @@ def run(conn, submission_dir):
     except (EOFError, BrokenPipeError):
         return
     except Exception as e:
+        if type(e).__name__ == "Disconnected":
+            return
         traceback.print_exc()
         try:
             conn.send({"type": "error", "message": f"{type(e).__name__}: {e}"})
@@ -262,8 +312,8 @@ def run(conn, submission_dir):
             pass
 
 
-def worker_main(conn, submission_dir):
-    run(conn, submission_dir)
+def worker_main(conn, submission_dir, inference="server"):
+    run(conn, submission_dir, inference)
     try:
         conn.close()
     except Exception:
